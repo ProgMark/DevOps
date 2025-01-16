@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# Sprawdzenie, czy podano odpowiednią liczbę argumentów
+if [ "$#" -ne 2 ]; then
+  echo "Użycie: $0 <prefiks_podów> <ścieżka_do_pliku_kustomize>"
+  exit 1
+fi
+
+# Argumenty
+PREFIX=$1
+KUSTOMIZE_FILE=$2
+
+# Sprawdzenie, czy plik kustomize istnieje
+if [ ! -f "$KUSTOMIZE_FILE" ]; then
+  echo "Plik kustomize $KUSTOMIZE_FILE nie istnieje."
+  exit 1
+fi
+
+# Odczytanie tagu obrazu z pliku kustomize
+EXPECTED_IMAGE_TAG=$(jq -r '.images[] | select(.name != null) | .newTag' "$KUSTOMIZE_FILE")
+
+if [ -z "$EXPECTED_IMAGE_TAG" ]; then
+  echo "Nie udało się odczytać tagu obrazu z pliku $KUSTOMIZE_FILE."
+  exit 1
+fi
+
+echo "Oczekiwany tag obrazu: $EXPECTED_IMAGE_TAG"
+
+# Pobranie listy podów z danym prefiksem
+pods=$(kubectl get pods -o json | jq -r ".items[] | select(.metadata.name | startswith(\"$PREFIX\"))")
+
+# Liczba podów
+pod_count=$(echo "$pods" | jq -r '.metadata.name' | wc -l)
+
+# Sprawdzenie liczby podów
+if [ "$pod_count" -ne 3 ]; then
+  echo "Niepoprawna liczba podów z prefiksem $PREFIX. Oczekiwano 3, znaleziono $pod_count."
+  exit 1
+fi
+
+# Sprawdzenie statusów podów
+not_running_count=$(echo "$pods" | jq -r 'select(.status.phase != "Running") | .metadata.name' | wc -l)
+
+if [ "$not_running_count" -ne 0 ]; then
+  echo "Nie wszystkie pody z prefiksem $PREFIX są w statusie Running."
+  exit 1
+fi
+
+# Sprawdzenie tagów obrazów
+invalid_image_count=$(echo "$pods" | jq -r --arg tag "$EXPECTED_IMAGE_TAG" \
+  'select(.spec.containers[].image | contains(":" + $tag) | not) | .metadata.name' | wc -l)
+
+if [ "$invalid_image_count" -ne 0 ]; then
+  echo "Nie wszystkie pody z prefiksem $PREFIX używają obrazu z tagiem $EXPECTED_IMAGE_TAG."
+  exit 1
+fi
+
+echo "Wszystkie pody z prefiksem $PREFIX spełniają wymagania."
